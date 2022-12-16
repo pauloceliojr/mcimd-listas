@@ -1,0 +1,330 @@
+---
+title: ''
+subtitle: ""
+author: ""
+date: ""
+
+output:
+ pdf_document:
+  fig_crop: false
+  highlight: tango
+  number_sections: false
+  fig_caption: true
+  keep_tex: true
+  includes:
+   in_header: Estilo.sty
+classoption: a4paper
+always_allow_html: true
+---
+
+
+\begin{center}
+ {\Large
+  DEPARTAMENTO DE CIÊNCIA DA COMPUTAÇÃO} \\
+ \vspace{0.5cm}
+   \begin{figure}[!t]
+    \centering
+    \includegraphics[width=9cm, keepaspectratio]{logo-UnB.eps}
+   \end{figure}
+ \vskip 1em
+ {\large
+  2 de dezembro de 2022}
+ \vskip 3em
+ {\LARGE
+ \textbf{Lista 2: Inferência estatística via simulação.}} \\
+  \vskip 1em
+ {\Large
+ Prof. Guilherme Rodrigues} \\
+  \vskip 1em
+ {\Large
+ Métodos Computacionais Intensivos para Mineração de Dados} \\
+  \vskip 1em
+ {\large
+ Programa de pós-graduação em Computação Aplicada (PPCA)} \\
+\end{center}
+
+ \vskip 5em
+ 
+  \begin{enumerate}[label={(\Alph*)}]
+    \item \textbf{As questões deverão ser respondidas em um único relatório \emph{PDF} ou \emph{html}, produzido usando as funcionalidades do \emph{Rmarkdown} ou outra ferramenta equivalente}.
+    \item \textbf{O aluno poderá consultar materiais relevantes disponíveis na internet, tais como livros, \emph{blogs} e artigos}.
+    \item \textbf{O trabalho é individual. Suspeitas de plágio e compartilhamento de soluções serão tratadas com rigor.}
+    \item \textbf{Os códigos \emph{R} utilizados devem ser disponibilizados na integra, seja no corpo do texto ou como anexo.}
+    \item \textbf{O aluno deverá enviar o trabalho até a data especificada na plataforma Microsoft Teams.}
+    \item \textbf{O trabalho será avaliado considerando o nível de qualidade do relatório, o que inclui a precisão das respostas, a pertinência das soluções encontradas, a formatação adotada, dentre outros aspectos correlatos.}
+    \item \textbf{Escreva seu código com esmero, evitando operações redundantes, comentando os resultados e usando as melhores práticas em programação.}
+\end{enumerate}
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, message=FALSE, warning=FALSE)
+pacman::p_load("tidyverse", "latex2exp", "knitr", "Cairo", "hexbin", "broom", "corrplot", "lubridate")
+```
+
+
+\newpage
+
+"O Monte Rainier é um estratovulcão, e a montanha mais alta do estado norte-americano de Washington.  (...) Sua altitude é de 4392m e, em dias de tempo claro, seu pico permanentemente nevado pode ser facilmente avistado de Seattle e outras cidades da região." (*wikipédia*)
+
+Um conjunto de dados sobre tentativas de se escalar o Monte Rainier está disponível no site *Kaggle*, e pode ser obtido pelo link https://www.kaggle.com/codersree/mount-rainier-weather-and-climbing-data/version/3.
+
+Usaremos Modelos Lineares Generalizados para descrever como o número de montanhistas que alcançam o cume do monte em um dado dia (sucessos) varia em função da temperatura média do ar (em graus Celsius).
+
+```{r echo=F, message=FALSE, warning=FALSE}
+tema.slides <- theme_get() + 
+  theme(plot.margin=unit(rep(.5, 4),"cm"),
+        legend.position="bottom", 
+        axis.title.y=element_text(margin=unit(rep(.5, 4),"cm"), size=14),
+        axis.title.x=element_text(margin=unit(rep(.5, 4),"cm"), size=14),
+        axis.text.y=element_text(size=14),
+        axis.text.x=element_text(size=14),
+        panel.grid.major=element_blank(), 
+        panel.grid.minor=element_blank(),
+        panel.background=element_blank(), 
+        axis.line=element_line(colour = "black")
+        )
+theme_set(tema.slides)
+
+climbing <- read_csv("climbing_statistics.csv")
+weather <- read_csv("Rainier_Weather.csv")
+convert <- function(x) (x-32) * 5/9
+shift <- function(x) x - mean(x)
+dados <- inner_join(climbing, weather) %>%
+  select(-matches("Percent|Battery")) %>%
+  filter(Attempted >= Succeeded) %>%
+  mutate(`Temperature AVG`= convert(`Temperature AVG`),
+         Cleaver = Route=="Disappointment Cleaver",
+         Date = mdy(Date)) %>%
+  select(Date, Succeeded, everything()) %>%
+  rename(Data = Date, 
+         Sucessos = Succeeded, 
+         Tentativas = Attempted, 
+         Temperatura = `Temperature AVG`,
+         Umidade_relativa = `Relative Humidity AVG`,
+         Velocidade_vento = `Wind Speed Daily AVG`,
+         Direc_vento = `Wind Direction AVG`,
+         Radiacao_solar = `Solare Radiation AVG`)
+```
+
+A seguir apresentamos a estrutura do banco de dados.
+\vspace{.5cm}
+```{r echo=T, message=FALSE, warning=FALSE}
+str(dados, width = 60, strict.width = "cut")
+```
+
+\vspace{.5cm}
+Considere o modelo 
+\begin{align*}
+Y_{ij} & \sim \text{Poisson}(\lambda_{ij}) \\
+\lambda_{ij} & = \exp{(\alpha + \beta t_i)},
+\end{align*}
+onde $Y_{ij}$ representa o número de montanhistas que atingiram o cume pela rota $j$ no dia $i$, $\alpha$ e $\beta$ são parâmetros desconhecidos do modelo e $t_i$ indica a temperatura média no dia $i$. Para uma determinada temperatura, o modelo prevê o mesmo valor para todas as rotas. Desconsidere os dados da rota *glacier only - no summit attempt*. Por fim, note que para obter o valor de $y_{ij}$ é preciso somar todos os sucessos registrados no dia $i$ para a rota $j$. 
+
+\vspace{.5cm}
+```{r echo=F, message=FALSE, warning=FALSE, results="hide"}
+mod <- glm(Sucessos ~ Temperatura, data = dados, family=poisson())
+tidy(mod)
+```
+
+
+\newpage
+
+**Questão 1)**
+
+\vspace{.5cm}
+
+\noindent
+a) Conduza um teste de hipóteses por simulação para avaliar a hipótese nula de que a média do número de sucessos obtidos pela rota ``Disappointment Cleaver'' é igual a média das demais rotas (conjuntamente).
+
+<!-- \textcolor{red}{Resposta:} -->
+<!-- Como a probabilidade de, sob a hipótese nula, gerarmos uma amostra sintética cuja diferença entre as médias sejam tão ou mais extrema do que a que observamos de fato é muito baixa, temos evidência estatística de que as médias populacionais (não observáveis) são distintas. -->
+
+<!-- ```{r echo=T, message=FALSE, warning=FALSE, eval=T} -->
+<!-- diff.obs <- dados %>% -->
+<!--   group_by(Cleaver) %>% -->
+<!--   summarise(media = mean(Sucessos), n=n()) %>% -->
+<!--   select(media) %>% -->
+<!--   range() %>% -->
+<!--   diff() %>% -->
+<!--   abs() -->
+
+<!-- m <- 10000 -->
+<!-- aux <- dados -->
+<!-- diff.sin <- numeric(m) -->
+<!-- for(i in 1:m) { -->
+<!-- aux$Cleaver <- sample(aux$Cleaver) -->
+<!-- diff.sin[i] <- aux %>% -->
+<!--   group_by(Cleaver) %>% -->
+<!--   summarise(media = mean(Sucessos), n=n()) %>% -->
+<!--   select(media) %>% -->
+<!--   range() %>% -->
+<!--   diff() %>% -->
+<!--   abs() -->
+<!-- } -->
+
+<!-- summary(diff.sin) -->
+<!-- print(diff.obs) -->
+<!-- ``` -->
+
+\vspace{.5cm}
+\noindent
+b) Obtenha o estimador de máxima verossimilhança de $\alpha$ e $\beta$ considerando o modelo proposto. Dica: Use a função `optim` do `R` para achar o ponto que maximiza a log-verossimilhança.
+
+<!-- \textcolor{red}{Resposta:} -->
+<!-- O código abaixo fornece as estimativas requeridas. -->
+
+<!-- ```{r echo=T, message=FALSE, warning=FALSE, eval=T} -->
+<!-- log.L <- function(beta,x,y) { -->
+<!--   lambda <- exp(beta[1] + x * beta[2]) -->
+<!--   sum(dpois(y, lambda, log=T)) -->
+<!-- } -->
+<!-- (params.est <- optim(c(1,1), -->
+<!--                      function(z) -log.L(z, dados$Temperatura, dados$Sucessos))$`par`) -->
+<!-- ``` -->
+
+\vspace{.5cm}
+\noindent
+c) Estime a distribuição de probabilidade do número de sucessos previstos para um dia em que a temperatura seja de 15 graus. 
+
+<!-- \textcolor{red}{Resposta:} -->
+<!-- Para resolver esse item, basta gerar amostras da distribuição preditiva e calcular a frequencia observada de cada valor. -->
+
+<!-- ```{r echo=T, message=FALSE, warning=FALSE, eval=T} -->
+<!-- lambda <- exp(params.est[1] + 15 * params.est[2]) -->
+<!-- previsao <- rpois(m, lambda) -->
+<!-- round((table(previsao) / sum(table(previsao)) * 100), 1) -->
+<!-- ``` -->
+
+\vspace{.5cm}
+\noindent
+d) Construa um intervalo de confiança de $95\%$ para $\exp({\beta})$ a partir do método de bootstrap paramétrico. Interprete o resultado considerando o contexto dos dados. Dica: calcule o aumento percentual da média esperada quando a temperatura aumenta em 1 grau Celsio.
+
+<!-- \textcolor{red}{Resposta:} -->
+<!-- A técnica de Bootstrap implementada abaixo provê os quantis do parâmetro de interesse. Para cada aumento de um grau na temperatura, o valor esperado do número de sucessos cresce entre 1,3 e $3,5\%$, com $95\%$ de confiança. -->
+
+<!-- ```{r echo=T, message=FALSE, warning=FALSE, eval=T} -->
+<!-- m <- 10000 -->
+<!-- beta.sin <- numeric(m) -->
+<!-- for(i in 1:m) { -->
+<!-- aux <- dados[sample(nrow(dados), nrow(dados), replace=T), ] -->
+<!-- mod.sin <- glm(Sucessos ~ Temperatura, data=aux, family=poisson()) -->
+<!-- beta.sin[i] <- mod.sin$coefficients[2] -->
+<!-- } -->
+<!-- quantile(exp(beta.sin), prob=c(.025, .975)) -->
+<!-- ``` -->
+
+\vspace{.5cm}
+\noindent
+e) Faça um diagnóstico do modelo via simulação. Para tanto, gere dados sintéticos usando o modelo obtido no item b), ajuste um novo modelo sobre os dados sintéticos e calcule o Erro quadrático médio (MSE). Repita esse procedimento 10000 vezes e compare os MSEs gerados com aquele do modelo obtido em b). Comente os resultados.
+
+<!-- \textcolor{red}{Resposta:} -->
+
+<!-- O desvio (MSE) é muito maior para os dados observados do que para os dados gerados pelo modelo ajustado. Portanto, há evidência estatística de que os dados não foram gerados pelo modelo ajustado. -->
+
+<!-- ```{r echo=T, message=FALSE, warning=FALSE, eval=T} -->
+<!-- m <- 10000 -->
+<!-- mse.sin <- numeric(m) -->
+<!-- for(i in 1:m) { -->
+<!-- dados.sin <- rpois(nrow(dados), predict(mod, newdata=dados)) -->
+<!-- mod.sin <- glm(dados.sin ~ Temperatura, data=aux, family=poisson()) -->
+<!-- mse.sin[i] <- mean((mod.sin$y - mod.sin$fitted.values)^2) -->
+<!-- } -->
+<!-- quantile(mse.sin, prob=c(.025, .975)) -->
+<!-- mean((mod$y - mod$fitted.values)^2) -->
+<!-- ``` -->
+
+<!-- \vspace{.5cm} -->
+<!-- f) Ajuste o modelo usando a função stan_glm e compare o resultado com os valores obtidos em b). -->
+
+<!-- \textcolor{red}{Resposta:} -->
+<!-- O ajuste pelo método Bayesiano foi, neste caso, bastante parecido com o ajuste via máxima verossimilhança. -->
+
+<!-- ```{r echo=T, message=FALSE, warning=FALSE} -->
+<!-- require(rstanarm) -->
+<!-- mod.Bayes <- stan_glm(Sucessos ~ Temperatura, data=dados, family=poisson()) -->
+<!-- tidy(mod.Bayes) -->
+<!-- ``` -->
+
+
+
+
+<!-- \vspace{.5cm} -->
+<!-- ```{r fig-sub, echo=FALSE, error=FALSE, fig.asp=1, fig.cap='Gráficos calculados com base no Modelo ajustado no item b). A fim de evitar pontos sobrepostos, os pontos na Figura (a) foram levemente deslocados (jitter plot). A Figura (b) descreve a matriz de confusão das previsões feitas pelo modelo.', fig.subcap=c('Disperção', 'Matriz de confusão'), out.width='.49\\linewidth', fig.ncol=2, fig.nrow=1, message=FALSE, warning=FALSE} -->
+
+<!-- # Gráfico (a): Disperção -->
+<!-- dados %>% -->
+<!--   ggplot(aes(x=Temperatura, y=Sucessos)) + -->
+<!--   geom_jitter(alpha=.8, height=.1, color="lightblue") + -->
+<!--   geom_smooth(method="glm") + -->
+<!--   scale_y_continuous(limits=c(0, 12),  -->
+<!--                      breaks=seq(0, 12, 2), -->
+<!--                      expand=c(.05, .05)) -->
+
+
+
+<!-- # Gráfico (b): Matriz de confusão  -->
+<!-- preditos <- round(mod$fitted.values) -->
+<!-- tabela <- as.data.frame(table(dados$Sucessos, preditos)) -->
+<!-- colnames(tabela) <- c("Sucessos", "Previstos", "Quantidade") -->
+<!-- class(tabela$Sucessos) <- "numeric" -->
+<!-- class(tabela$Previstos) <- "numeric" -->
+<!-- class(tabela$Quantidade) <- "numeric" -->
+<!-- tabela[, 1:2] <- tabela[, 1:2] - 1 -->
+<!-- tabela %>%  -->
+<!--   filter(Sucessos<6 & Previstos<6) %>% -->
+<!--   ggplot(aes(Previstos, Sucessos)) + -->
+<!--   geom_tile(aes(fill=Quantidade)) + -->
+<!--   scale_fill_gradient(low="white", high="black") + -->
+<!--   scale_x_continuous(breaks=0:5, expand=c(0, 0)) + -->
+<!--   scale_y_continuous(breaks=0:5, expand=c(0, 0)) + -->
+<!--   geom_rect(aes(xmin=-.5, xmax=5.5, ymin=-.5, ymax=5.5),  -->
+<!--             color="black", alpha=0, size=1) + -->
+<!--   geom_rect(aes(xmin=.5, xmax=1.5, ymin=-.5, ymax=5.5),  -->
+<!--             color="red", alpha=0, size=1) + -->
+<!--   geom_rect(aes(xmin=-.5, xmax=5.5, ymin=.5, ymax=1.5),  -->
+<!--             color="red", alpha=0, size=1) -->
+<!-- ``` -->
+
+<!-- \vspace{.5cm} -->
+<!-- **Questão 2)** -->
+
+\vspace{.5cm}
+**Questão bônus)**
+
+Use o método de integração por Monte Carlo para estimar o volume de uma elipsoide definida por 
+\[
+\frac{x^2}{2} + \frac{y^2}{3} + \frac{z^2}{4} = 1.
+\]
+
+\newpage
+
+**Anexo**
+
+Código usado para organizar o banco de dados.
+```{r echo=T, message=FALSE, warning=FALSE, eval=F}
+library(readr)
+require(tidyverse)
+require(broom)
+require(lubridate)
+library(corrplot)
+
+climbing <- read_csv("climbing_statistics.csv")
+weather <- read_csv("Rainier_Weather.csv")
+convert <- function(x) (x-32) * 5/9
+shift <- function(x) x - mean(x)
+dados <- inner_join(climbing, weather) %>%
+  select(-matches("Percent|Battery")) %>%
+  filter(Attempted >= Succeeded) %>%
+  mutate(`Temperature AVG`= convert(`Temperature AVG`),
+         Cleaver = Route=="Disappointment Cleaver",
+         Date = mdy(Date)) %>%
+  select(Date, Succeeded, everything()) %>%
+  rename(Data = Date, 
+         Sucessos = Succeeded, 
+         Tentativas = Attempted, 
+         Temperatura = `Temperature AVG`,
+         Umidade_relativa = `Relative Humidity AVG`,
+         Velocidade_vento = `Wind Speed Daily AVG`,
+         Direc_vento = `Wind Direction AVG`,
+         Radiacao_solar = `Solare Radiation AVG`)
+```
